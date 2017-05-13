@@ -2,8 +2,9 @@
 #include <string.h>
 #include <stdarg.h>
 
-#define MLOG_ERROR(msg,args...) MLog::Log(MLog::MLOG_TYPE_ERROR, msg"\n", ##args)
-#define MLOG_INFO(msg,args...) MLog::Log(MLog::MLOG_TYPE_INFO, msg"\n", ##args)
+//#define MLOG_ERROR(msg,args...) MLog::Log(MLog::MLOG_TYPE_ERROR, msg"\n", args)
+//#define MLOG_INFO(msg,args...) MLog::Log(MLog::MLOG_TYPE_INFO, msg"\n", args)
+#define MLOG(level,msg,args...) MLog::Log(MLog::MLOG_TYPE_##level, msg"\n", ##args)
 
 class MLog {
     enum {
