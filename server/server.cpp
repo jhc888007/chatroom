@@ -12,10 +12,15 @@
 #include <time.h>
 
 #include "log/log.hpp"
+#include "proto/net_message.pb.h"
 
 #define MAXLINE 1024
 #define MAXCONN 1024
 #define MAXTIMEMINUTE 2
+
+void temp(pb::Login lo) {
+    return;
+}
 
 void *server_thread(void *arg) {
     int connect_socket_id = *(int*)arg;
