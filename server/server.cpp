@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <vector>
+#include <time.h>
 
 #include "log/log.hpp"
 
@@ -82,7 +83,8 @@ int main(int argc,char **argv) {
                 FD_SET(fd[i], &fdsr);
                 if (time_change) {
                     time_fd[i]--;
-                    if (time_fd[i] =< 0) {
+                    if (time_fd[i] <= 0) {
+                        MLOG(INFO, "Client Timeout, %d", fd[i]);
                         close(fd[i]);
                         FD_CLR(fd[i], &fdsr);
                         fd[i] = 0;
@@ -103,8 +105,45 @@ int main(int argc,char **argv) {
             MLOG(ERROR, "Select Error");
             break;
         } else if (ret == 0) {
-            MLOG(INFO, "Select Timeout");
             continue;
+        }
+
+        MLOG(INFO, "Select Something");
+        int len;
+        char buff[MAXLINE];
+        for (int i = 0; i < MAXCONN; i++) {
+            if (FD_ISSET(fd[i], &fdsr)) {
+                len = recv(fd[i], buff, MAXLINE, 0);
+                if (len <= 0) {
+                    MLOG(INFO, "Client Close, %d", fd[i]);
+                    close(fd[i]);
+                    FD_CLR(fd[i], &fdsr);
+                    fd[i] = 0;
+                } else {
+                    buff[len] = 0;
+                    MLOG(INFO, "Client Receive, %d, %d, %.*s", fd[i], len, len, buff);
+                }
+            }
+        }
+
+        int connect_socket_id;
+        if (FD_ISSET(listen_socket_id, &fdsr)) {
+            if ((connect_socket_id = accept(listen_socket_id, (struct sockaddr*)NULL, NULL))==-1) {
+                MLOG(ERROR, "Server Accpet Error: %s Errno: %d", strerror(errno), errno);
+                continue;
+            }
+            int i;
+            for (i = 0; i < MAXCONN; i++) {
+                if (fd[i] == 0) {
+                    fd[i] = connect_socket_id;
+                    MLOG(INFO, "Server Accpet: %d", connect_socket_id);
+                    break;
+                }
+            }
+            if (i >= MAXCONN) {
+                MLOG(INFO, "Server Full, Close: %d", connect_socket_id);
+                close(connect_socket_id);
+            }
         }
 
         /*if ((connect_socket_id = accept(listen_socket_id, (struct sockaddr*)NULL, NULL))==-1) {
@@ -148,9 +187,9 @@ int main(int argc,char **argv) {
         }*/
     }
 
-    for (std::vector<pthread_t>::iterator it = thread_vector.begin(); it != thread_vector.end(); it++) {
+    /*for (std::vector<pthread_t>::iterator it = thread_vector.begin(); it != thread_vector.end(); it++) {
         pthread_join(*it, NULL);
-    }
+    }*/
 
     close(listen_socket_id);
 }
