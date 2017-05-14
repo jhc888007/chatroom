@@ -2,6 +2,11 @@ syntax = "proto2";
 
 package pb; 
 
+enum MsgType {
+    LOGIN = 0x1001;
+    LOGIN_RE = 0x1002;
+}
+
 message Login {
     required string name = 1; 
     required string password = 2;
@@ -15,9 +20,10 @@ message UserInfo {
 
 message Login_Re {
     required int32 ret = 1;
-    optional string name = 2;
-    optional int32 user_id = 3;
-    repeated UserInfo friends = 4;
+    required string error_description = 2;
+    optional string name = 3;
+    optional int32 user_id = 4;
+    repeated UserInfo friends = 5;
 }
 
 message ChatroomInfo {
