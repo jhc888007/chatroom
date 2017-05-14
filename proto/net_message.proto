@@ -1,0 +1,64 @@
+syntax = "proto2";
+
+package pb; 
+
+message Login {
+    required string name = 1; 
+    required string password = 2;
+}
+
+message UserInfo {
+    required string name = 1;
+    required int32 user_id = 2;
+    required bool online = 3;
+}
+
+message Login_Re {
+    required int32 ret = 1;
+    optional string name = 2;
+    optional int32 user_id = 3;
+    repeated UserInfo friends = 4;
+}
+
+message ChatroomInfo {
+    required string name = 1;
+    required int32 chatroom_id = 2;
+    repeated UserInfo users = 3;
+}
+
+message Chatrooms {
+}
+
+message Chatrooms_Re {
+    required int32 ret = 1;
+    repeated ChatroomInfo chatrooms = 2;
+}
+    
+message EnterChatroom {
+    required int32 chatroom_id = 1;
+}
+
+message EnterChatroom_Re {
+    required int32 ret = 1;
+    optional ChatroomInfo chatroom = 2;
+}
+
+message ChatroomChat {
+    required int32 chatroom_id = 1;
+    required string msg = 2;
+}
+
+message ChatroomChat_Re {
+    required int32 ret = 1;
+}
+
+message FriendChat {
+    required int32 user_id = 1;
+    required string msg = 2;
+}
+
+message FriendChat_Re {
+    required int32 ret = 1;
+}
+
+
