@@ -10,7 +10,7 @@
 
 #include "log/log.hpp"
 
-#define MAXLINE 1024
+#define MAXLEN 1024
 
 int main(int argc,char **argv)
 {
@@ -35,7 +35,7 @@ int main(int argc,char **argv)
     MLOG(INFO, "Socket Connected");
 
     for (int i = 0; i < 20; i++) {
-        char sendline[MAXLINE] = "Send Msg";
+        char sendline[MAXLEN] = "Send Msg";
         int n;
         if ((send(socket_id,sendline,strlen(sendline),0)) < 0) {
             MLOG(ERROR, "Send Msg Error %s Errno: %d", strerror(errno),errno);

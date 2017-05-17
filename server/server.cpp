@@ -16,7 +16,7 @@
 #include "log/log.hpp"
 #include "proto/net_message.pb.h"
 
-#define MAXLINE 1024
+#define MAXLEN 1024
 #define MAXCONN 1024
 #define MAXEVENT 512
 #define MAXTIMEMINUTE 2
@@ -27,11 +27,11 @@ void temp(pb::Login lo) {
 
 void *server_thread(void *arg) {
     int connect_fd = *(int*)arg;
-    char buff[MAXLINE];
+    char buff[MAXLEN];
     int n;
     MLOG(INFO, "Server Connected");
     for (;;) {
-        n = recv(connect_fd, buff, MAXLINE, 0);
+        n = recv(connect_fd, buff, MAXLEN, 0);
         if (n <= 0) break;
         buff[n] = '\0';
         MLOG(INFO, "Recv Msg From Client: %s, Len: %d", buff, n);
@@ -87,8 +87,8 @@ int main(int argc,char **argv) {
     //EPoll
     int epoll_fd;
     struct epoll_event es[MAXEVENT], tmp_event;
-    epoll_fd = epoll_create(MAXCONN);
     {
+        epoll_fd = epoll_create(MAXCONN);
         tmp_event.events = EPOLLIN|EPOLLET;
         tmp_event.data.fd = listen_fd;
         if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &tmp_event) < 0) {
@@ -141,8 +141,8 @@ int main(int argc,char **argv) {
                 }
 
                 int len;
-                char buff[MAXLINE];
-                len = recv(efd, buff, MAXLINE, 0);
+                char buff[MAXLEN];
+                len = recv(efd, buff, MAXLEN, 0);
                 if (len <= 0) {
                     MLOG(INFO, "Client Close, %d", efd);
                     close(efd);
@@ -194,7 +194,7 @@ int main(int argc,char **argv) {
             }
 
             int len;
-            char buff[MAXLINE];
+            char buff[MAXLEN];
             for (int i = 1; i <= MAXCONN; i++) {
                 if (cfd[i].fd <= 0 ) {
                     continue;
@@ -205,7 +205,7 @@ int main(int argc,char **argv) {
                     cfd[i].fd = 0;
                 }
                 if (cfd[i].revents & (POLLIN|POLLERR)) {
-                    len = recv(cfd[i].fd, buff, MAXLINE, 0);
+                    len = recv(cfd[i].fd, buff, MAXLEN, 0);
                     if (len <= 0) {
                         MLOG(INFO, "Client Close, %d", fd[i]);
                         close(cfd[i].fd);
@@ -260,10 +260,10 @@ int main(int argc,char **argv) {
 
             MLOG(INFO, "Select Something");
             int len;
-            char buff[MAXLINE];
+            char buff[MAXLEN];
             for (int i = 0; i < MAXCONN; i++) {
                 if (FD_ISSET(fd[i], &fdsr)) {
-                    len = recv(fd[i], buff, MAXLINE, 0);
+                    len = recv(fd[i], buff, MAXLEN, 0);
                     if (len <= 0) {
                         MLOG(INFO, "Client Close, %d", fd[i]);
                         close(fd[i]);
@@ -333,7 +333,7 @@ int main(int argc,char **argv) {
                 MLOG(INFO, "Server Connected");
                 close(listen_fd);
                 for (;;) {
-                    n = recv(connect_fd, buff, MAXLINE, 0);
+                    n = recv(connect_fd, buff, MAXLEN, 0);
                     if (n <= 0) break;
                     buff[n] = '\0';
                     MLOG(INFO, "Recv Msg From Client: %s, Len: %d", buff, n);
