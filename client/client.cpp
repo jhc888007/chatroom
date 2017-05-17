@@ -34,7 +34,7 @@ int main(int argc,char **argv)
     }
     MLOG(INFO, "Socket Connected");
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 20; i++) {
         char sendline[MAXLINE] = "Send Msg";
         int n;
         if ((send(socket_id,sendline,strlen(sendline),0)) < 0) {

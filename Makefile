@@ -1,4 +1,4 @@
-objects = mser.out mcli.out mcli1.out
+objects = mser.out mcli.out mcli1.out mcli2.out
 
 protocfg = `pkg-config --cflags --libs protobuf`
 
@@ -11,12 +11,16 @@ endef
 define make_cli1
 	g++ client/client.cpp -I. -g -o mcli1.out
 endef
+define make_cli2
+	g++ client/client.cpp -I. -g -o mcli2.out
+endef
 
 $(objects):
 	make clean
 	$(make_ser)
 	$(make_cli)
 	$(make_cli1)
+	$(make_cli2)
 ser:
 	$(make_ser)
 cli:
