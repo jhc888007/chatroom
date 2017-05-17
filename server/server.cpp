@@ -12,6 +12,8 @@
 #include <time.h>
 #include <poll.h>
 #include <sys/epoll.h>
+#include <set>
+#include <map>
 
 #include "log/log.hpp"
 #include "proto/net_message.pb.h"
@@ -21,344 +23,274 @@
 #define MAXEVENT 512
 #define MAXTIMEMINUTE 2
 
-void temp(pb::Login lo) {
-    return;
-}
-
-void *server_thread(void *arg) {
-    int connect_fd = *(int*)arg;
-    char buff[MAXLEN];
-    int n;
-    MLOG(INFO, "Server Connected");
-    for (;;) {
-        n = recv(connect_fd, buff, MAXLEN, 0);
-        if (n <= 0) break;
-        buff[n] = '\0';
-        MLOG(INFO, "Recv Msg From Client: %s, Len: %d", buff, n);
+class Octets {
+    enum {
+        MAX_BUFFER_SIZE = 10240,
+    };
+    int size;
+    int capacity;
+    char buf[MAX_BUFFER_SIZE];
+public:
+    Octets() {size = 0; capacity = MAX_BUFFER_SIZE;}
+    ~Octets() {;}
+    inline int GetSize() {return size;}
+    inline int GetCapacity() {return capacity;}
+    inline int GetBlank() {return capacity - size;}
+    inline char *GetBegin() {return &buf[0];}
+    inline char *GetCurrent() {return &buf[size];}
+    inline void Clear() {size = 0;};
+    int Set(char *x, int len) {
+        if (x == NULL || len <= 0 || len >= capacity)
+            return -1;
+        memcpy(buf, x, len);
+        size = len;
     }
-    MLOG(INFO, "Server Release");
-    close(connect_fd);
-    return NULL;
-}
+    int Add(char *x, int len) {
+        if (x == NULL || len <= 0 || len + size > capacity)
+            return -1;
+        memcpy(buf + size, x, len);
+        size += len;
+    }
+};
 
-int main(int argc,char **argv) {
+class Poll {
+public:
+    enum {
+        EVENT_OUT,
+        EVENT_IN,
+        EVENT_ERROR,
+        EVENT_INVALID_INPUT,
+    };
+    enum {
+        POLL_SUCCESS = 0,
+        POLL_ERROR,
+    };
+
+    class Epoll {
+        enum {
+            MAX_EVENT_NUM = 512,
+            MAX_CONNECT_NUM = 1024,
+        };
+        typedef std::set<int> FdSet;
+        FdSet fd_set;
+        int epoll_fd;
+
+        int epoll_event_num;
+        struct epoll_event epoll_event_out[MAX_EVENT_NUM];
+    public:
+        Epoll(int listen_socket_fd, int max_connect_num = MAX_CONNECT_NUM) {
+            epoll_fd = epoll_create(max_connect_num<MAX_CONNECT_NUM?max_connect_num:MAX_CONNECT_NUM);
+            AddEvent(listen_socket_fd, EPOLLIN|EPOLLET);
+        };
+        ~Epoll() {
+            close(epoll_fd);
+        }
+
+        void AddEvent(int fd, int events) {
+            struct epoll_event tmp;
+            tmp.events = events;
+            tmp.data.fd = fd;
+            int ret;
+            if (fd_set.find(fd) != fd_set.end()) {
+                ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &tmp);
+            } else {
+                ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &tmp);
+                if (ret >= 0) {
+                    fd_set.insert(fd);
+                }
+            }
+            if (ret) {
+                MLOG(ERROR, "Epoll Add Event Error, Fd: %d", fd);
+            } else {
+                MLOG(INFO, "Epoll Add Event Success, Fd: %d", fd);
+            }
+            return;
+        }
+        void DelEvent(int fd) {
+            if (fd_set.find(fd) == fd_set.end()){
+                MLOG(ERROR, "Epoll Del Event Error, Fd: %d", fd);
+                return;
+            }
+            struct epoll_event tmp;
+            tmp.data.fd = fd;
+            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, &tmp);
+            return;
+        }
+        inline int Wait(int timeout = 1000) {
+            epoll_event_num = epoll_wait(epoll_fd, epoll_event_out, MAX_EVENT_NUM, timeout);
+            return epoll_event_num;
+        }
+        inline int GetEvent(int i, int &fd) {
+            if (i >= epoll_event_num) return Poll::EVENT_INVALID_INPUT;
+            unsigned int event = epoll_event_out[i].events;
+            fd = epoll_event_out[i].data.fd;
+            if ((event & EPOLLERR) || (event & EPOLLHUP)) return Poll::EVENT_ERROR;
+            if (event & POLLIN) return Poll::EVENT_IN;
+            if (event & POLLOUT) return Poll::EVENT_OUT;
+            return true;
+        }
+    };
+         
+private:
+    struct SocketInfo {
+        int _fd;
+        struct sockaddr_in _addr;
+        Octets _rOs, _wOs;
+        SocketInfo(int fd, const struct sockaddr_in &addr) {
+            _fd = fd;
+            _addr = addr;
+        }
+    };
+    typedef std::map<int, struct SocketInfo> SocketMap;
+    SocketMap socket_map;
     int listen_fd;
-    if ((listen_fd = socket(AF_INET,SOCK_STREAM,0)) < 0) {
-        MLOG(ERROR, "Server Socket Error, %d", listen_fd);
-        exit(0);
+    struct sockaddr_in listen_addr;        
+    Epoll *p_epoll;
+
+    void addSocketMap(int fd, const struct sockaddr_in &addr) {
+        struct SocketInfo *info = new SocketInfo(fd, addr);
+        socket_map.insert(std::make_pair(fd, *info));
     }
-    MLOG(INFO, "Server Socket, %d", listen_fd);
-    
-    struct sockaddr_in sockaddr;
-    memset(&sockaddr,0,sizeof(sockaddr));
-    sockaddr.sin_family = AF_INET;
-    sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    sockaddr.sin_port = htons(10004);
-    if (bind(listen_fd, (struct sockaddr *) &sockaddr, sizeof(sockaddr)) < 0) {
-        MLOG(ERROR, "Server Bind Error, %d, %x", ntohs(sockaddr.sin_port),
-            ntohl(sockaddr.sin_addr.s_addr));
-        exit(0);
+    void delSocketMap(int fd) {
+        SocketMap::iterator it = socket_map.find(fd);
+        if (it != socket_map.end())
+            socket_map.erase(it);
     }
-    MLOG(INFO, "Server Bind, %d, %x", ntohs(sockaddr.sin_port),
-        ntohl(sockaddr.sin_addr.s_addr));
-    
-    if (listen(listen_fd, MAXCONN) < 0) {
-        MLOG(ERROR, "Server Listen Error");
-        exit(0);
+    Octets *getReadBuffer(int fd) {
+        SocketMap::iterator it = socket_map.find(fd);
+        if (it != socket_map.end())
+            return &(it->second._rOs);
+        return NULL;
     }
-    MLOG(INFO, "Server Listening");
-
-    int connect_fd, max_socket_id;
-    
-    //Thread
-    std::vector<pthread_t> thread_vector;
-
-    //Select
-    fd_set fdsr;
-    int fd[MAXCONN];
-
-    //Poll
-    struct pollfd cfd[MAXCONN];
-    memset((void*)cfd, 0, sizeof(struct pollfd)*MAXCONN);
-    cfd[0].fd = listen_fd;
-    cfd[0].events = POLLIN;
-    max_socket_id = listen_fd;
-
-    //EPoll
-    int epoll_fd;
-    struct epoll_event es[MAXEVENT], tmp_event;
-    {
-        epoll_fd = epoll_create(MAXCONN);
-        tmp_event.events = EPOLLIN|EPOLLET;
-        tmp_event.data.fd = listen_fd;
-        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &tmp_event) < 0) {
-            MLOG(ERROR, "EPoll Init Error");
-            exit(1);
+    Octets *getWriteBuffer(int fd) {
+        SocketMap::iterator it = socket_map.find(fd);
+        if (it != socket_map.end())
+            return &(it->second._wOs);
+        return NULL;
+    }
+ 
+public:
+    Poll(int port_num) {
+        if ((listen_fd = socket(AF_INET,SOCK_STREAM,0)) < 0) {
+            listen_fd = 0;
+            MLOG(ERROR, "Server Socket Error, %d", listen_fd);
+            return ;
         }
+        MLOG(INFO, "Server Socket Open, %d", listen_fd);
+
+        memset(&listen_addr,0,sizeof(listen_addr));
+        listen_addr.sin_family = AF_INET;
+        listen_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        listen_addr.sin_port = htons(port_num);
+        p_epoll = (Epoll *)new Epoll(listen_fd);
     }
-
-    time_t time_fd[MAXCONN];
-    time_t time_now;
-    for (;;) {
-        //EPoll
-        {
-            int timeout = 2000;
-            int ret = epoll_wait(epoll_fd, es, MAXEVENT, timeout);
-
-            if (ret < 0) {
-                MLOG(ERROR, "EPoll Error");
-                break;
-            } else if (ret == 0) {
-                continue;
-            }
-
-            int efd;
-            unsigned int eflag;
-            for (int i = 0; i < ret; i++) {
-                efd = es[i].data.fd;
-                eflag = es[i].events;
-                if ((eflag & EPOLLERR) ||
-                    (eflag & EPOLLHUP) ||
-                    !(eflag & EPOLLIN))
-                {
-                    MLOG(ERROR, "EPoll Event Error: %d", eflag);
-                    close(efd);
-                    exit(1);
-                }
-
-                if (efd == listen_fd) {
-                    connect_fd = accept(listen_fd, NULL, NULL);
-
-                    if (connect_fd < 0) {
-                        MLOG(ERROR, "Accept Error");
-                    } else {
-                        tmp_event.data.fd = connect_fd;
-                        tmp_event.events = EPOLLIN|EPOLLET;
-                        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, connect_fd, &tmp_event);
-                    }
-
-                    continue;
-                }
-
-                int len;
-                char buff[MAXLEN];
-                len = recv(efd, buff, MAXLEN, 0);
-                if (len <= 0) {
-                    MLOG(INFO, "Client Close, %d", efd);
-                    close(efd);
-                } else {
-                    buff[len] = 0;
-                    MLOG(INFO, "Client Receive, Fd: %d, Len: %d, Msg: %.*s", efd, len, len, buff);
-                }
-            }
+    ~Poll() {
+        delete p_epoll;
+        for (SocketMap::iterator it = socket_map.begin(); it != socket_map.end(); it++) {
+            MLOG(INFO, "Connect Socket Close, %d", it->first);
+            close(it->first);
+        }
+        MLOG(INFO, "Server Socket Close, %d", listen_fd);
+        close(listen_fd);
+    }
+    inline bool IsValid() {return listen_fd==0;}
+    inline int BindAndListen() {
+        int ret;
+        if ((ret = bind(listen_fd, (struct sockaddr *)&listen_addr, sizeof(listen_addr))) < 0) {
+            MLOG(ERROR, "Server Bind Error, %d, %x", ntohs(listen_addr.sin_port),
+                ntohl(listen_addr.sin_addr.s_addr));
+            return ret;
+        }
+        MLOG(INFO, "Server Bind, %d, %x", ntohs(listen_addr.sin_port),
+            ntohl(listen_addr.sin_addr.s_addr));
+        
+        if ((ret = listen(listen_fd, MAXCONN)) < 0) {
+            MLOG(ERROR, "Server Listen Error");
+            return ret;
         }
 
-        //Poll
-        /*
-        {
-            time_now = time((time_t*)NULL);
+        MLOG(INFO, "Server Listening");
+        return 0;
+    }
+    inline int Execute() {
+        int event_num = p_epoll->Wait();
 
-            int timeout = 1000;
-            int ret = poll(cfd, max_socket_id+1, timeout);
+        if (event_num < 0) {
+            MLOG(ERROR, "Poll Wait Error");
+            return POLL_ERROR;
+        } else if (event_num == 0) {
+            return POLL_SUCCESS;
+        }
 
-            if (ret < 0) {
-                MLOG(ERROR, "Poll Error");
-                break;
-            } else if (ret == 0) {
-                continue;
-            }
+        for (int i = 0; i < event_num; i++) {
+            int fd;
+            int ret = p_epoll->GetEvent(i, fd);
 
-            if (cfd[0].revents & POLLIN) {
-                connect_fd = accept(listen_fd, NULL, NULL);
-
+            if (fd == listen_fd) {
+                int connect_fd;
+                struct sockaddr_in connect_addr;        
+                unsigned int len;
+                connect_fd = accept(listen_fd, (struct sockaddr *)&listen_addr, (socklen_t *)&len);
                 if (connect_fd < 0) {
                     MLOG(ERROR, "Accept Error");
-                } else {
-                    int loop;
-                    for (loop = 0; loop < MAXCONN; loop++) {
-                        if (cfd[loop].fd <= 0) {
-                            cfd[loop].fd = connect_fd;
-                            cfd[loop].events = POLLIN;
-                            time_fd[loop] = time_now;
-                            if (connect_fd > max_socket_id) {
-                                max_socket_id = connect_fd;
-                            }
-                            break;
-                        }
-                    }
-                    if (loop == MAXCONN) {
-                        MLOG(ERROR, "Too Many Connection");
-                        exit(1);
-                    }
-                }
-            }
-
-            int len;
-            char buff[MAXLEN];
-            for (int i = 1; i <= MAXCONN; i++) {
-                if (cfd[i].fd <= 0 ) {
-                    continue;
-                }
-                if (time_now - time_fd[i] > 60) {
-                    MLOG(INFO, "Client Close, %d", fd[i]);
-                    close(cfd[i].fd);
-                    cfd[i].fd = 0;
-                }
-                if (cfd[i].revents & (POLLIN|POLLERR)) {
-                    len = recv(cfd[i].fd, buff, MAXLEN, 0);
-                    if (len <= 0) {
-                        MLOG(INFO, "Client Close, %d", fd[i]);
-                        close(cfd[i].fd);
-                        cfd[i].fd = 0;
-                    } else {
-                        buff[len] = 0;
-                        time_fd[i] = time_now;
-                        MLOG(INFO, "Client Receive, Fd: %d, Len: %d, Msg: %.*s", cfd[i].fd, len, len, buff);
-                    }
-                }
-            }
-        }
-        */
-        
-        //Select
-        /*
-        {
-            time_now = time((time_t*)NULL);
-
-            FD_ZERO(&fdsr);
-            FD_SET(listen_fd, &fdsr);
-            MLOG(INFO, "Server Fd: %d", listen_fd);
-            max_socket_id = listen_fd;
-            for (int i = 0; i < MAXCONN; i++) {
-                if (fd[i] == 0) {
-                    continue;
-                }
-                FD_SET(fd[i], &fdsr);
-                MLOG(INFO, "Client Fd: %d", fd[i]);
-                if (time_now - time_fd[i] > 60) {
-                    MLOG(INFO, "Client Timeout, %d", fd[i]);
-                    close(fd[i]);
-                    FD_CLR(fd[i], &fdsr);
-                    fd[i] = 0;
-                }
-                if (fd[i] && fd[i] > max_socket_id) {
-                    max_socket_id = fd[i];
-                }
-            }
-
-            struct timeval timeout;
-            timeout.tv_sec = 2;
-            timeout.tv_usec = 0;
-            int ret = select(max_socket_id+1, &fdsr, NULL, NULL, &timeout);
-
-            if (ret < 0) {
-                MLOG(ERROR, "Select Error");
-                break;
-            } else if (ret == 0) {
-                continue;
-            }
-
-            MLOG(INFO, "Select Something");
-            int len;
-            char buff[MAXLEN];
-            for (int i = 0; i < MAXCONN; i++) {
-                if (FD_ISSET(fd[i], &fdsr)) {
-                    len = recv(fd[i], buff, MAXLEN, 0);
-                    if (len <= 0) {
-                        MLOG(INFO, "Client Close, %d", fd[i]);
-                        close(fd[i]);
-                        FD_CLR(fd[i], &fdsr);
-                        fd[i] = 0;
-                    } else {
-                        buff[len] = 0;
-                        time_fd[i] = time_now;
-                        MLOG(INFO, "Client Receive, Fd: %d, Len: %d, Msg: %.*s", fd[i], len, len, buff);
-                    }
-                }
-            }
-
-            if (FD_ISSET(listen_fd, &fdsr)) {
-                if ((connect_fd = accept(listen_fd, (struct sockaddr*)NULL, NULL))==-1) {
-                    MLOG(ERROR, "Server Accpet Error: %s Errno: %d", strerror(errno), errno);
-                    continue;
-                }
-                int i;
-                for (i = 0; i < MAXCONN; i++) {
-                    if (fd[i] == 0) {
-                        fd[i] = connect_fd;
-                        time_fd[i] = time_now;
-                        MLOG(INFO, "Server Accpet: %d", connect_fd);
-                        break;
-                    }
-                }
-                if (i >= MAXCONN) {
-                    MLOG(INFO, "Server Full, Close: %d", connect_fd);
+                } else if (len != sizeof(connect_addr)) {
+                    MLOG(ERROR, "Accept Struct Size Unknown");
                     close(connect_fd);
+                } else {
+                    p_epoll->AddEvent(connect_fd, EPOLLIN|EPOLLET);
+                    addSocketMap(connect_fd, connect_addr);
                 }
-            }
-        }
-        */
-
-        //Multithread
-        /*
-        if (0) {
-            if ((connect_fd = accept(listen_fd, (struct sockaddr*)NULL, NULL))==-1) {
-                MLOG(ERROR, "Server Accpet Error: %s Errno: %d", strerror(errno), errno);
                 continue;
             }
-            
-            pthread_t thread_id;
-            if (pthread_create(&thread_id, NULL, &server_thread, &connect_fd) != 0) {
-                MLOG(ERROR, "Thread Create Fail, Socket: %d", connect_fd);
-                close(connect_fd);
-            }
-            thread_vector.push_back(thread_id);
-            MLOG(INFO, "Thread Create Success, Thread: %d", (int)thread_id);
-        }
-        */
 
-        //Single
-        /*
-        if (0) {
-            if ((connect_fd = accept(listen_fd, (struct sockaddr*)NULL, NULL))==-1) {
-                MLOG(ERROR, "Server Accpet Error: %s Errno: %d", strerror(errno), errno);
-                continue;
-            }
-            
-            pid_t pid = fork();
-            if (pid == -1) {
-                MLOG(ERROR, "Server Fork Fail");
-            }
-            if (pid == 0) {
-                MLOG(INFO, "Server Connected");
-                close(listen_fd);
-                for (;;) {
-                    n = recv(connect_fd, buff, MAXLEN, 0);
-                    if (n <= 0) break;
-                    buff[n] = '\0';
-                    MLOG(INFO, "Recv Msg From Client: %s, Len: %d", buff, n);
+            Octets *os;
+            switch(ret) {
+            case EVENT_INVALID_INPUT:
+                MLOG(ERROR, "Get Event Invalid Input");
+                return POLL_ERROR;
+            case EVENT_ERROR:
+                MLOG(INFO, "Get Event Socket Poll Error");
+                p_epoll->DelEvent(fd);
+                close(fd);
+                break;
+            case EVENT_IN:
+                os = getReadBuffer(fd);
+                int result;
+                result = recv(fd, os->GetCurrent(), os->GetBlank(), 0);
+                if (ret <= 0) {
+                    MLOG(INFO, "Client Recv Error Fd Close, %d", fd);
+                    p_epoll->DelEvent(fd);
+                    close(fd);
+                } else {
+                    MLOG(INFO, "Client Receive, Fd: %d, Len: %d", fd, result);
                 }
-                MLOG(INFO, "Server Release");
-                close(connect_fd);
-                exit(0);
-            } else {
-                MLOG(INFO, "Server New Fork Pid: %d", (int)pid);
-                close(connect_fd);
+                break;
+            case EVENT_OUT:
+                os = getWriteBuffer(fd);
+                MLOG(INFO, "Client Send, Fd: %d", fd);
+                break;
+            default:
+                MLOG(ERROR, "Get Event Unknown: %d", ret);
+                return POLL_ERROR;
             }
         }
-        */
+        return POLL_SUCCESS;
     }
-    
-    //EPoll
-    close(epoll_fd);
+};
 
-    //Multithread
-    /*
-    {
-        for (std::vector<pthread_t>::iterator it = thread_vector.begin(); it != thread_vector.end(); it++) {
-            pthread_join(*it, NULL);
+int main(int argc,char **argv) {
+    Poll *poll = new Poll(10004);
+    int ret = poll->BindAndListen();
+    if (ret < 0) {
+        MLOG(ERROR, "Bind And Listen: %d", ret);
+        exit(0);
+    } 
+    while (1) {
+        ret = poll->Execute();
+        if (ret) {
+            MLOG(ERROR, "Poll Error: %d", ret);
+            break;
+        }
     }
-    */
-
-    close(listen_fd);
+    return 0;
 }
